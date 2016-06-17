@@ -1,80 +1,77 @@
-#set directory
-
-setwd("/Users/nakicam/Dropbox/R/getting-and-cleaning-data/course-project")
-
-#download data
-library(httr) 
-url <- "https://d396qusza40orc.cloudfront.net/getdata%2Fprojectfiles%2FUCI%20HAR%20Dataset.zip"
-file <- "data.zip"
-if(!file.exists(file)){
-	print("download started")
-	download.file(url, file, method="curl")
-}
-
-#unzip and create folders (if those ain't exist)
-datafolder <- "UCI HAR Dataset"
-resultsfolder <- "result"
-if(!file.exists(datafolder)){
-	print("unzip started")
-	unzip(file, list = FALSE, overwrite = TRUE)
-} 
-if(!file.exists(resultsfolder)){
-	print("creating folder")
-	dir.create(resultsfolder)
-} 
-
-#read the  txt and covnert to data.frame
-importtables <- function (filename,cols = NULL){
-	print(paste("Processing table:", filename))
-	processing <- paste(datafolder,filename,sep="/")
-	data <- data.frame()
-	if(is.null(cols)){
-		data <- read.table(processing,sep="",stringsAsFactors=F)
-	} else {
-		data <- read.table(processing,sep="",stringsAsFactors=F, col.names= cols)
-	}
-	data
-}
-
-#importing tables
-imp <- importtables("processing.txt")
-
-#read data and build database
-getdaten <- function(type, imp){
-	print(paste("Getting data", type))
-	subject_data <- importtables(paste(type,"/","subject_",type,".txt",sep=""),"id")
-	y_data <- importtables(paste(type,"/","y_",type,".txt",sep=""),"activity")
-	x_data <- importtables(paste(type,"/","X_",type,".txt",sep=""),imp$V2)
-	return (cbind(subject_data,y_data,x_data))
-}
-
-#run getdaten
-test <- getdaten("test", imp)
-train <- getdaten("train", imp)
-
-#save the resulting data in the indicated folder
-result <- function (daten,name){
-	print(paste("saving", name))
-	file <- paste(resultsfolder, "/", name,".csv" ,sep="")
-	write.csv(daten,file)
-}
-
-#1) Merges the training and the test sets to create one data set -> daten
+#Load packages
 library(plyr)
-daten <- rbind(train, test)
-daten <- arrange(daten, id)
+library(data.table)
+library(tidyr)
 
-#2) Extracts only the measurements on the mean and standard deviation for each measurement in mean_and_std
-mean_and_std <- daten[,c(1,2,grep("std", colnames(daten)), grep("mean", colnames(daten)))]
-saveresults(mean_and_std,"mean_and_std")
+## Download and unzip dataset 
+if (!file.exists("./UCI HAR Dataset")) {
+    fileUrl<- "https://d396qusza40orc.cloudfront.net/getdata%2Fprojectfiles%2FUCI%20HAR%20Dataset.zip"
+    download.file(fileUrl, "Dataset.zip")
+    unzip("Dataset.zip") 
+}
 
-#3) descriptive activity names to name the activities in the data set
-activity_labels <- gettables("activity_labels.txt")
+#Load data files
+data_test_X <- read.table("./UCI HAR Dataset/test/X_test.txt")
+data_train_X <- read.table("./UCI HAR Dataset/train/X_train.txt")
 
-#4) labels the data set with descriptive variable names 
-daten$activity <- factor(daten$activity, levels=activity_labels$V1, labels=activity_labels$V2)
+#Load activity files
+data_test_Y <- read.table("./UCI HAR Dataset/test/Y_test.txt")
+data_train_Y <- read.table("./UCI HAR Dataset/train/Y_train.txt")
 
-#5) Create tidy data set tidy_dataset.csv 
-tidy_dataset <- ddply(mean_and_std, .(id, activity), .fun=function(x){ colMeans(x[,-c(1:2)]) })
-colnames(tidy_dataset)[-c(1:2)] <- paste(colnames(tidy_dataset)[-c(1:2)], "_mean", sep="")
-saveresults(tidy_dataset,"tidy_dataset.csv")
+#Load subject files
+data_test_subject <- read.table("./UCI HAR Dataset/test/subject_test.txt")
+data_train_subject <- read.table("./UCI HAR Dataset/train/subject_train.txt")
+
+#1. Merging the training and the test sets to create one data set.
+#One data set for X
+data_all_X <- rbind(data_train_X, data_test_X)
+
+#One data set for Y
+data_all_Y <- rbind(data_train_Y, data_test_Y)
+
+#One data set for Subject
+data_all_subject <- rbind(data_train_subject, data_test_subject)
+
+#2. Extract only the measurements on the mean and standard deviation for each measurement.
+#Load features.txt file
+data_features <- read.table("./UCI HAR Dataset/features.txt")
+
+#Get list of mean and std columns
+mean_std <- grep("-(mean|std)\\(\\)", data_features[, 2])
+
+#Subset the mean and std columns
+data_all_X <- data_all_X[, mean_std]
+
+#Set column names
+names(data_all_X) <- data_features[mean_std, 2]
+
+#3. Use descriptive activity names to name the activities in the data set
+#Load activity_labels.txt file
+data_activities <- read.table("./UCI HAR Dataset/activity_labels.txt")
+
+#Update correct activity name
+data_all_Y[, 1] <- data_activities[data_all_Y[, 1], 2]
+
+names(data_all_Y) <- "activity"
+
+#4. labels the data set with descriptive variable names
+names(data_all_subject) <- "subject"
+
+# bind all the data in a single data set
+all_data <- cbind(data_all_X, data_all_Y, data_all_subject)
+
+#Update label of the data
+names(all_data)<-gsub("std()", "SD", names(all_data))
+names(all_data)<-gsub("mean()", "MEAN", names(all_data))
+names(all_data)<-gsub("^t", "time", names(all_data))
+names(all_data)<-gsub("^f", "frequency", names(all_data))
+names(all_data)<-gsub("Acc", "Accelerometer", names(all_data))
+names(all_data)<-gsub("Gyro", "Gyroscope", names(all_data))
+names(all_data)<-gsub("Mag", "Magnitude", names(all_data))
+names(all_data)<-gsub("BodyBody", "Body", names(all_data))
+
+#5. creating tidy data set with the average(mean) of each variable for each activity and each subject
+avg <- ddply(all_data, .(subject, activity), function(x) colMeans(x[, 1:66]))
+
+#Create tidy data set
+write.table(avg, "tidy_data.txt", row.name=FALSE)
